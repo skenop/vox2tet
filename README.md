@@ -118,17 +118,35 @@ A small polycrystal (~50 grains, 30³ voxels). Pipeline takes ~3 s on a
 |---|---|
 | ![JMA_30 full](doc/result_view/JMA_30_result2.png) | ![JMA_30 interfaces](doc/result_view/JMA_30_result2_intrface.png) |
 
-Resulting mesh quality:
+Resulting mesh quality (numbers below come from the same run; the tet
+section quotes TetGen's own quality report verbatim):
 
-| Metric                           | Surface  | Tet mesh |
-|----------------------------------|----------|----------|
-| Nodes / elements                 | 16 208 / 36 653 tri | 23 680 / 125 184 tets |
-| Min angle                        | **17.95°** (corner) | **17.96°** (dihedral) |
-| Min internal dihedral            | **40.05°** | — |
-| Min boundary dihedral            | 42.18°   | — |
-| Violations of 40° / 20° threshold | 0 / 0    | — |
-| Inverted tets (V < 0)            | —        | **0** |
-| Tets with dihedral < 20°         | —        | 6 of 125 k |
+**Surface mesh** — 16 208 nodes / 36 653 triangles
+
+| Metric                           | Value |
+|----------------------------------|-------|
+| Min triangle corner angle        | **17.95°** |
+| Corner angles < 20° / < 30°      | 4 / 228 |
+| Min dihedral, internal interface | **40.05°** |
+| Min dihedral, boundary edge      | 42.18° |
+| Violations of 40° / 20° threshold | 0 / 0 |
+| Max node-to-initial-MC distance  | 0.73 voxel |
+
+**Tetrahedral mesh** — 23 680 nodes / 125 184 tetrahedra
+
+| TetGen metric                  | Value |
+|--------------------------------|-------|
+| Smallest dihedral angle        | **10.17°** |
+| Largest dihedral angle         | 162.04° |
+| Smallest face (triangle) angle | 13.10° |
+| Largest face (triangle) angle  | 149.77° |
+| Smallest aspect ratio          | 1.23  |
+| Largest aspect ratio           | 11.94 |
+| Smallest tet volume            | 0.0041 |
+| Largest tet volume             | 4.38  |
+| Tets with dihedral < 10°       | 0     |
+| Tets with dihedral 10°–20°     | 2 839 of 125 k |
+| Tets with dihedral 160°–180°   | 6 of 125 k |
 
 ## Programmatic use
 

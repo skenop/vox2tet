@@ -110,21 +110,43 @@ golden-angle hue rotation.
 | Max node-to-initial-MC distance     | 0.73 voxel      |
 
 **Tetrahedral mesh** (`JMA_30_RE.1.{node,ele,face}`, 23 680 nodes,
-125 184 tets — TetGen invoked with `-pYA -q2/15 -o/150 -nn -V`):
+125 184 tets — TetGen invoked with `-pYA -q2/15 -o/150 -nn -V`).
+Numbers below are copied directly from TetGen's `Mesh quality
+statistics` block printed at the end of the run, so they correspond
+exactly to what you will see in your own console output:
 
-| Metric                            | Value           |
-|-----------------------------------|-----------------|
-| Min tetrahedral dihedral angle    | **17.96°**      |
-| Mean tetrahedral dihedral angle   | 110.12°         |
-| Tetrahedra with dihedral < 20°    | 6 of 125 k      |
-| Tetrahedra with dihedral > 170°   | 0               |
-| Edge-length ratio (Lmax/Lmin) p95 | 2.49            |
-| Inverted tets (V < 0)             | **0**           |
+| TetGen metric                  | Value      |
+|--------------------------------|------------|
+| Smallest dihedral angle        | **10.17°** |
+| Largest dihedral angle         | 162.04°    |
+| Smallest face (triangle) angle | 13.10°     |
+| Largest face (triangle) angle  | 149.77°    |
+| Smallest aspect ratio          | 1.23       |
+| Largest aspect ratio           | 11.94      |
+| Smallest tet volume            | 0.0041     |
+| Largest tet volume             | 4.38       |
+| Shortest edge                  | 0.291      |
+| Longest edge                   | 4.81       |
+
+Dihedral histogram (TetGen bins, 6 dihedrals per tet, total
+6 × 125 184 = 751 104):
+
+| Range                | Count   |    | Range                | Count   |
+|----------------------|--------:|----|----------------------|--------:|
+| 0–10°                | 0       |    | 80–110°              | 175 688 |
+| 10–20°               | 2 839   |    | 110–120°             | 28 330  |
+| 20–30°               | 23 656  |    | 120–130°             | 17 047  |
+| 30–40°               | 57 658  |    | 130–140°             | 10 393  |
+| 40–50°               | 94 800  |    | 140–150°             | 5 835   |
+| 50–60°               | 118 133 |    | 150–160°             | 160     |
+| 60–70°               | 118 315 |    | 160–170°             | 6       |
+| 70–80°               | 98 244  |    | 170–180°             | 0       |
 
 The surface-side dihedral and corner-angle guards (described in
-[§9 Key algorithms](#9-key-algorithms)) propagate directly into the
-TetGen output: 0 inverted tets, 0 dihedrals below 10°, only 6 of 125 k
-tets in the 17°–20° band.
+[§9 Key algorithms](#9-key-algorithms)) keep the worst tet shapes in
+the 10°–20° band rather than the typical 0°–10° band that uncontrolled
+remeshing produces for multi-material data: of 751 104 dihedrals,
+none falls below 10° and only 6 exceed 160°.
 
 ## 4. Input data format
 

@@ -67,3 +67,5 @@ vcpkg_installed/
 # test output & cache
 Testing/
 .cache/
+
+tests/data/*/vox2tet_out/
