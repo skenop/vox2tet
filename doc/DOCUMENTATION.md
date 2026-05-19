@@ -363,6 +363,56 @@ cmake --install build --prefix /usr/local
 C++17-capable toolchain (gcc ≥ 9, clang ≥ 10, MSVC 2019+) and CMake
 ≥ 3.20.
 
+### Building on Windows
+
+Two supported toolchains:
+
+**1. MSYS2 / MinGW-w64 (UCRT64)** — recommended for a Linux-like workflow.
+
+```powershell
+# Install prerequisites once
+pacman -S mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-ninja
+
+# Configure + build (from project root, PowerShell)
+$env:PATH = "C:\msys64\ucrt64\bin;" + $env:PATH
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release `
+      -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ `
+      -DCMAKE_CXX_FLAGS="-D_USE_MATH_DEFINES"
+cmake --build build --config Release
+```
+
+The `-D_USE_MATH_DEFINES` flag is required: MinGW's `<cmath>` does not
+expose `M_PI` under strict `-std=c++17`, which the project uses for
+dihedral and corner-angle conversions in the remesh code. This is the
+only configuration change needed compared to a Linux build — no source
+or `CMakeLists.txt` edit is necessary.
+
+**2. MSVC (Visual Studio 2019 / 2022)** — works without the
+`_USE_MATH_DEFINES` flag, since the Microsoft headers expose `M_PI`
+when `<cmath>` is included.
+
+```powershell
+cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+cmake --build build --config Release
+```
+
+**libtiff on Windows.** If no system libtiff is present, the project
+falls back to a vendored libtiff build via `FetchContent`. The vendored
+build is minimal — TIFFs using external codecs (zlib/deflate, JPEG,
+ZSTD, LZMA, WebP, …) cannot be decoded. Uncompressed, LZW, and PackBits
+TIFFs work in all cases. To enable compressed TIFFs, install a system
+libtiff with the codecs you need and reconfigure:
+
+```powershell
+pacman -S mingw-w64-ucrt-x86_64-libtiff      # MSYS2
+# or vcpkg install tiff[core,zstd,lzma,webp,jpeg] (MSVC)
+```
+
+**TetGen on Windows.** TetGen must be reachable on `PATH` at runtime
+for the volume-meshing stage. On MSYS2:
+`pacman -S mingw-w64-ucrt-x86_64-tetgen`. The surface pipeline runs
+fine without it; only the `.1.{node,ele,face}` outputs are skipped.
+
 ## 9. Key algorithms
 
 ### 9.1 Wu–Sullivan multi-material marching cubes

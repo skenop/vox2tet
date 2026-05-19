@@ -46,6 +46,46 @@ With no arguments, `run_vox2tet` prints usage.
 
 C++17 compiler + CMake ≥ 3.20.
 
+### Building on Windows (MSYS2 / MinGW-w64)
+
+The project builds out of the box on Windows without source modifications.
+Tested toolchain: **MSYS2 UCRT64 (gcc 14+) + Ninja + CMake ≥ 3.20**.
+
+Prerequisites (install once, e.g. via [MSYS2](https://www.msys2.org/)):
+
+```powershell
+pacman -S mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-ninja
+```
+
+Then, from the project root in PowerShell:
+
+```powershell
+$env:PATH = "C:\msys64\ucrt64\bin;" + $env:PATH
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release `
+      -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ `
+      -DCMAKE_CXX_FLAGS="-D_USE_MATH_DEFINES"
+cmake --build build --config Release
+```
+
+Notes:
+
+* `-D_USE_MATH_DEFINES` is required because MinGW's `<cmath>` does not
+  expose `M_PI` under strict `-std=c++17`. This is the only configuration
+  change needed compared to a Linux build.
+* If system `libtiff` is not available, CMake's `FetchContent` falls back
+  to building a vendored libtiff. Note that the vendored build is
+  minimal: TIFFs using external codecs (zlib/deflate, JPEG, ZSTD, LZMA,
+  WebP, …) cannot be decoded. Uncompressed, LZW, and PackBits TIFFs work
+  fine. To enable compressed TIFFs, install the corresponding system
+  libraries (e.g. via `pacman -S mingw-w64-ucrt-x86_64-libtiff`) and
+  reconfigure — libtiff auto-detects them.
+* TetGen must be on `PATH` at runtime for volume meshing
+  (`pacman -S mingw-w64-ucrt-x86_64-tetgen` or a manual install).
+
+MSVC (Visual Studio 2019+) is also supported and does not require the
+`_USE_MATH_DEFINES` flag, since MSVC's `<cmath>` already exposes `M_PI`
+when included.
+
 ## Input
 
 A 3-D TIFF where each voxel value is the **material id** of that voxel.
