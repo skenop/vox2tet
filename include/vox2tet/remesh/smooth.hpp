@@ -128,6 +128,20 @@ Eigen::VectorXd calc_sizing_field(const mesh::HalfEdges& he,
                                   const std::vector<marching_cubes::Interface>& interfaces,
                                   double Lmin, double Lmax);
 
+// Grading limit on the sizing field (reseeding Stage C): multi-source
+// Dijkstra relaxation over the mesh edge graph enforcing
+//     L[v] <= L[u] + (grading - 1) * |uv|
+// for every edge (u,v). The result is the pointwise-largest field that
+// is <= L everywhere and satisfies the bound, so grading only ever
+// LOWERS values (it refines the coarse side of a transition, never
+// coarsens the fine side). Returns the number of vertices lowered by
+// more than `tol`; no-op when grading <= 1.
+std::size_t limit_sizing_gradient(const mesh::HalfEdges& he,
+                                  const Coords& xyz,
+                                  Eigen::VectorXd& L,
+                                  double grading,
+                                  double tol = 1e-12);
+
 // Revert smoothing locally where boundary dihedral got sharper than
 // `min_dangle_boundary`. `blinks` must give the "opposite" (or pair)
 // half-edge for every fixed half-edge. When null, we use he(:,3); for

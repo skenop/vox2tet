@@ -35,6 +35,8 @@ add_executable(test_smoke
     test_m3c.cpp
     test_jma_surface.cpp
     test_half_edge.cpp
+    test_reseed.cpp
+    test_cdt_mmg.cpp
 )
 target_link_libraries(test_smoke PRIVATE vox2tet GTest::gtest_main)
 target_compile_definitions(test_smoke PRIVATE

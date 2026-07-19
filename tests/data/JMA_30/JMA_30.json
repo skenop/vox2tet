@@ -39,7 +39,7 @@
         "n_remesh_itr": 7,
         "n_smooth_steps": 7,
         "ncpus": 4,
-        "out_path_base": "./tests/data/JMA_30/vox2tet_out/JMA_30",
+        "out_path_base": "./tests/data/JMA_30/vox2tet_out_new/JMA_30",
         "smooth_alpha": 0.5
     }
 ]

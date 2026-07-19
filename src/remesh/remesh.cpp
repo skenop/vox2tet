@@ -12,6 +12,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <map>
+#include <set>
 #include <stdexcept>
 #include <unordered_map>
 #include <vector>
@@ -20,6 +22,25 @@ namespace vox2tet::remesh {
 
 namespace {
 constexpr u32 kInvalidU32 = std::numeric_limits<u32>::max();
+
+// Canonical-edge multiplicity (number of half-edges per undirected
+// vertex pair). A non-manifold edge (3-4 incident half-edges on a
+// multi-material line) has its opposites paired arbitrarily two-by-two,
+// so each pair looks interior to the not_fixed_h filter — but a split
+// or flip acting on one pair desynchronizes that sheet from the others.
+// Interior split/flip must act on genuinely manifold (mult == 2) edges.
+inline std::uint64_t edge_key(u32 a, u32 b) {
+    if (a > b) std::swap(a, b);
+    return (static_cast<std::uint64_t>(a) << 32) | b;
+}
+
+std::unordered_map<std::uint64_t, u32> edge_multiplicity(const mesh::HalfEdges& he) {
+    std::unordered_map<std::uint64_t, u32> mult;
+    mult.reserve(static_cast<std::size_t>(he.rows()));
+    for (Eigen::Index i = 0; i < he.rows(); ++i)
+        ++mult[edge_key(he(he(i, 2), 0), he(i, 0))];
+    return mult;
+}
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -151,8 +172,13 @@ void split_edges(RemeshState& st) {
     const Eigen::Index nhe0 = he.rows();
     const Eigen::Index nv0  = xyz.rows();
 
-    // Filter: not-fixed, length > 4/3 * min(sz[a], sz[b]), and to avoid
-    // double-processing pick orientation with target > source.
+    // Splitting one pair of a non-manifold edge would subdivide the edge
+    // on one sheet only, leaving the other sheet spanning the full chord
+    // (a T-junction, χ drops by 1 per split).
+    auto edge_mult = edge_multiplicity(he);
+
+    // Filter: not-fixed, manifold, length > 4/3 * min(sz[a], sz[b]), and
+    // to avoid double-processing pick orientation with target > source.
     std::vector<u32> itr;
     itr.reserve(static_cast<std::size_t>(nhe0));
     for (Eigen::Index i = 0; i < nhe0; ++i) {
@@ -160,6 +186,7 @@ void split_edges(RemeshState& st) {
         const u32 src = he(he(i, 2), 0);  // prev.target == source
         const u32 dst = he(i, 0);          // target
         if (dst <= src) continue;
+        if (edge_mult[edge_key(src, dst)] != 2) continue;
         const Eigen::Vector3d a = xyz.row(src).transpose();
         const Eigen::Vector3d b = xyz.row(dst).transpose();
         const double L = (a - b).norm();
@@ -305,6 +332,11 @@ void flip_half_edge(const Settings& s,
         adj[src][dst] = 1;
     }
 
+    // Flipping one opposite-pair of a non-manifold edge would remove the
+    // diagonal from this sheet only, detaching it from the other sheets
+    // that still span the edge. Maintained across accepted flips.
+    auto edge_mult = edge_multiplicity(he);
+
     // V2H = boundary half-edges per vertex. Used to gate flips that would
     // duplicate an existing edge across a non-manifold (multi-material)
     // boundary. Mirrors the reference
@@ -375,6 +407,9 @@ void flip_half_edge(const Settings& s,
         const u32 vi1 = he(e0, 0);
         const u32 vi2 = he(e1, 0);
         const u32 vi3 = he(e4, 0);
+
+        const auto em = edge_mult.find(edge_key(vi0, vi1));
+        if (em == edge_mult.end() || em->second != 2) continue;
 
         // Reject if (vi2, vi3) already an edge (the standard adj check).
         if (adj[vi2].count(vi3) > 0) continue;
@@ -533,6 +568,8 @@ void flip_half_edge(const Settings& s,
         adj[vi1].erase(vi0);
         adj[vi2][vi3] = 1;
         adj[vi3][vi2] = 1;
+        edge_mult.erase(edge_key(vi0, vi1));
+        edge_mult[edge_key(vi2, vi3)] = 2;
         ++n_flipped;
     }
 
@@ -624,7 +661,7 @@ void collapse_edges(const Settings& s, RemeshState& st,
     const double c45 = 4.0 / 5.0;
     std::size_t n_collapsed = 0;
     std::size_t n_cand = 0, n_skip_len = 0, n_skip_ring = 0, n_skip_dup = 0,
-                n_skip_dih = 0, n_skip_orient = 0;
+                n_skip_dih = 0, n_skip_orient = 0, n_skip_qual = 0;
 
     // Iterate half-edges in stable order — newest-added ones may sit at
     // the end; that's fine.
@@ -682,12 +719,36 @@ void collapse_edges(const Settings& s, RemeshState& st,
         // boundary). This is what keeps the result manifold without the
         // full blink table. The single-cpu path performs a more elaborate
         // boundary-dihedral check; we approximate it with this skip.
+        //
+        // Cap fix (do_collapse_near_bedges, only with do_reseed_bedges):
+        // that skip freezes every vertex one ring from a feature chain,
+        // which is exactly what leaves cap triangles — a free vertex
+        // nearly collinear with a coarsened chain chord — in the final
+        // mesh. The collapse rewiring only ever touches the four side
+        // edges of the two dying triangles, so a fixed hedge elsewhere
+        // in the ring is safe provided those four (and the collapsing
+        // pair itself) are free, manifold and mutual. Retargeted fan
+        // triangles that touch the chain are quality-guarded below.
         bool ring_has_fixed = false;
         for (auto h : c_h)  if (!nfh[h]) { ring_has_fixed = true; break; }
         if (!ring_has_fixed) {
             for (auto h : c_hr) if (!nfh[h]) { ring_has_fixed = true; break; }
         }
-        if (ring_has_fixed) { ++n_skip_dih; continue; }
+        if (ring_has_fixed) {
+            if (!(s.do_reseed_bedges && s.do_collapse_near_bedges)) {
+                ++n_skip_dih;
+                continue;
+            }
+            bool dying_ok = he(e3, 3) == e0;
+            for (u32 eS : {e1, e2, e4, e5}) {
+                const u32 op = he(eS, 3);
+                if (!nfh[eS] || op == kInvalidU32 || he(op, 3) != eS) {
+                    dying_ok = false;
+                    break;
+                }
+            }
+            if (!dying_ok) { ++n_skip_dih; continue; }
+        }
 
         // Dihedral angle check around the c_h ring.
         // For each h in c_h that is not-fixed, compute the dihedral
@@ -766,6 +827,49 @@ void collapse_edges(const Settings& s, RemeshState& st,
         }
         if (!adjacency_ok) { ++n_skip_orient; continue; }
 
+        // Near-chain quality guard (relaxed-path collapses only): any
+        // retargeted fan triangle that keeps a chain vertex must not
+        // flip its normal, and its min corner angle must stay above
+        // min_corner_angle_boundary unless it was already below and
+        // does not get worse. This is what lets a cap vertex disappear
+        // sideways (the ex-cap triangle is re-evaluated with the new
+        // apex) while forbidding the collapse from minting new caps.
+        if (ring_has_fixed) {
+            auto min_corner = [](const Eigen::Vector3d& a,
+                                 const Eigen::Vector3d& b,
+                                 const Eigen::Vector3d& c) {
+                auto ang = [](const Eigen::Vector3d& u,
+                              const Eigen::Vector3d& v) {
+                    const double nu = u.norm(), nv = v.norm();
+                    if (nu < 1e-15 || nv < 1e-15) return 0.0;
+                    const double d =
+                        std::clamp(u.dot(v) / (nu * nv), -1.0, 1.0);
+                    return std::acos(d) * 180.0 / M_PI;
+                };
+                return std::min({ang(b - a, c - a), ang(a - b, c - b),
+                                 ang(a - c, b - c)});
+            };
+            bool qual_ok = true;
+            const Eigen::Vector3d b0 = xyz.row(vi0).transpose();
+            const Eigen::Vector3d b1 = xyz.row(vi1).transpose();
+            for (std::size_t k = 0; k + 1 < c_h.size(); ++k) {
+                const u32 va = he(c_h[k], 0), vb = he(c_h[k + 1], 0);
+                if (nfv[va] && nfv[vb]) continue;    // no chain contact
+                const Eigen::Vector3d pa = xyz.row(va).transpose();
+                const Eigen::Vector3d pb = xyz.row(vb).transpose();
+                const Eigen::Vector3d n_old = (pa - b0).cross(pb - b0);
+                const Eigen::Vector3d n_new = (pa - b1).cross(pb - b1);
+                if (n_new.dot(n_old) <= 0.0) { qual_ok = false; break; }
+                const double a_new = min_corner(b1, pa, pb);
+                if (a_new < s.min_corner_angle_boundary &&
+                    a_new < min_corner(b0, pa, pb)) {
+                    qual_ok = false;
+                    break;
+                }
+            }
+            if (!qual_ok) { ++n_skip_qual; continue; }
+        }
+
         // ---- Apply collapse -------------------------------------------
         // 1. All half-edges hitting vi0 now hit vi1. the reference does
         //      hedges[hedges[c_h, 1], 0] = vi1
@@ -797,6 +901,7 @@ void collapse_edges(const Settings& s, RemeshState& st,
                   << " skip_dup=" << n_skip_dup
                   << " skip_dih=" << n_skip_dih
                   << " skip_orient=" << n_skip_orient
+                  << " skip_qual=" << n_skip_qual
                   << " collapsed=" << n_collapsed;
     if (n_collapsed == 0) return;
 
@@ -864,6 +969,42 @@ RemeshResult remesh(const Settings& s,
     const Eigen::Index n_xyz0 = st.xyz.rows();
     VOX2TET_LOG() << "Initial node count: " << n_xyz0;
 
+    // Debug: log Euler characteristic after each phase when
+    // V2T_REMESH_DEBUG_CHI is set. χ_all counts every xyz row (the way
+    // the watertightness test does); χ_ref counts only vertices that are
+    // referenced by some half-edge.
+    const bool dbg_chi = std::getenv("V2T_REMESH_DEBUG_CHI") != nullptr;
+    auto log_chi = [&st, dbg_chi](const char* phase) {
+        if (!dbg_chi) return;
+        const auto& he = st.hedges;
+        std::set<std::pair<u32, u32>> edges;
+        std::vector<std::uint8_t> used(static_cast<std::size_t>(st.xyz.rows()), 0);
+        std::size_t n_nonmutual = 0, n_multi = 0;
+        std::map<std::pair<u32, u32>, int> edge_mult;
+        for (Eigen::Index i = 0; i < he.rows(); ++i) {
+            u32 a = he(he(i, 2), 0), b = he(i, 0);
+            used[a] = used[b] = 1;
+            if (a > b) std::swap(a, b);
+            edges.insert({a, b});
+            ++edge_mult[{a, b}];
+            const u32 op = he(i, 3);
+            if (op != kInvalidU32 && he(op, 3) != static_cast<u32>(i)) ++n_nonmutual;
+        }
+        for (const auto& kv : edge_mult) if (kv.second > 2) ++n_multi;
+        const long V = static_cast<long>(st.xyz.rows());
+        const long Vr = static_cast<long>(
+            std::count(used.begin(), used.end(), std::uint8_t{1}));
+        const long E = static_cast<long>(edges.size());
+        const long F = static_cast<long>(he.rows() / 3);
+        VOX2TET_LOG() << "[chi] " << phase << ": V=" << V << " Vref=" << Vr
+                      << " E=" << E << " F=" << F
+                      << " chi_all=" << (V - E + F)
+                      << " chi_ref=" << (Vr - E + F)
+                      << " nonmutual_opp=" << n_nonmutual
+                      << " multi_edges=" << n_multi;
+    };
+    log_chi("initial");
+
     // Debug gates for isolating remesh sub-steps. Set V2T_REMESH=skip_X
     // (X ∈ split, collapse, flip, tsmooth) to skip individual stages.
     const char* skip = std::getenv("V2T_REMESH_SKIP");
@@ -877,17 +1018,20 @@ RemeshResult remesh(const Settings& s,
         if (!should_skip("split")) {
             VOX2TET_PRINT("Start split edges");
             split_edges(st);
+            log_chi("split");
         }
 
         if (!should_skip("collapse")) {
             VOX2TET_PRINT("Start collapse edges");
             collapse_edges(s, st, /*do_not_boundary=*/true, /*do_only_boundary=*/false);
+            log_chi("collapse");
         }
 
         if (!should_skip("flip")) {
             VOX2TET_PRINT("Start flip edges");
             flip_half_edge(s, st.hedges, st.not_fixed_h, st.xyz, st.not_fixed_v,
                            /*do_not_boundary=*/false, /*do_only_boundary=*/false);
+            log_chi("flip");
         }
 
         if (!should_skip("tsmooth")) {

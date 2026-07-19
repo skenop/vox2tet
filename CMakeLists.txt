@@ -25,6 +25,58 @@ set(VOX2TET_PYTHON_BIN "" CACHE PATH "Python interpreter with numpy+scipy (for V
 include(FetchContent)
 include(cmake/dependencies.cmake)
 
+# ------------------------------------------- third-party volume meshers
+# CDT (Diazzi/Panozzo/Vaxman/Attene, SIGGRAPH Asia 2023): in-process
+# Steiner constrained Delaunay tetrahedrization. Compiled as its own
+# static library because it requires C++20, strict FP rounding
+# semantics (-frounding-math) and its own SIMD flags — none of which
+# should leak into the main C++17 library. src/tetmesh/steiner_cdt.cpp
+# is our wrapper: the only TU that includes CDT headers; it exposes a
+# plain-STL interface consumed by the C++17 runner.
+#
+# License: with VOX2TET_CDT_MAROT=OFF (default) CDT builds in its LGPL
+# configuration, matching this project's LGPL-3.0-or-later. Switching
+# the option ON enables the (faster) GPL-licensed Marot face-recovery
+# method and makes the combined binary GPL — leave OFF unless that is
+# acceptable.
+option(VOX2TET_CDT_MAROT "Build CDT with the GPL-only Marot face-recovery method" OFF)
+option(VOX2TET_CDT_AVX2 "Compile CDT with AVX2+FMA (build host must support them)" ON)
+add_library(vox2tet_cdt STATIC
+    third-party/CDT/src/giftWrap.cpp
+    third-party/CDT/src/PLC.cpp
+    third-party/CDT/src/delaunay.cpp
+    src/tetmesh/steiner_cdt.cpp)
+target_include_directories(vox2tet_cdt SYSTEM PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/third-party/CDT/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/third-party/CDT/include)
+target_include_directories(vox2tet_cdt PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include)
+set_target_properties(vox2tet_cdt PROPERTIES
+    CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+if(MSVC)
+    target_compile_options(vox2tet_cdt PRIVATE /fp:strict /Oi /D_CRT_SECURE_NO_WARNINGS)
+    if(VOX2TET_CDT_AVX2)
+        target_compile_options(vox2tet_cdt PRIVATE /arch:AVX2)
+    endif()
+else()
+    target_compile_options(vox2tet_cdt PRIVATE -O2 -frounding-math)
+    if(VOX2TET_CDT_AVX2)
+        target_compile_options(vox2tet_cdt PRIVATE -mavx2 -mfma)
+    endif()
+endif()
+if(VOX2TET_CDT_MAROT)
+    target_compile_definitions(vox2tet_cdt PRIVATE USE_MAROTS_METHOD)
+endif()
+
+# MMG3D (LGPL): in-process tetrahedral mesh optimizer, used to improve
+# the quality of the CDT output while preserving material interfaces.
+# Built as a subproject; only the static library is compiled.
+set(BUILD "MMG3D" CACHE STRING "mmg: build only mmg3d" FORCE)
+set(LIBMMG3D_STATIC ON  CACHE BOOL "" FORCE)
+set(LIBMMG3D_SHARED OFF CACHE BOOL "" FORCE)
+set(BUILD_TESTING   OFF CACHE BOOL "" FORCE)
+add_subdirectory(third-party/mmg EXCLUDE_FROM_ALL)
+
 # ---------------------------------------------------------------- core library
 file(GLOB_RECURSE VOX2TET_SOURCES CONFIGURE_DEPENDS
     src/core/*.cpp
@@ -34,7 +86,8 @@ file(GLOB_RECURSE VOX2TET_SOURCES CONFIGURE_DEPENDS
     src/marching_cubes/*.cpp
     src/brep/*.cpp
     src/remesh/*.cpp
-    src/tetgen/*.cpp)
+    src/tetgen/*.cpp
+    src/tetmesh/cdt_mmg_runner.cpp)
 
 add_library(vox2tet ${VOX2TET_SOURCES})
 target_include_directories(vox2tet
@@ -42,7 +95,7 @@ target_include_directories(vox2tet
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(vox2tet
     PUBLIC  Eigen3::Eigen nlohmann_json::nlohmann_json
-    PRIVATE ${TIFF_LIBRARIES})
+    PRIVATE ${TIFF_LIBRARIES} vox2tet_cdt libmmg3d_a)
 target_include_directories(vox2tet PRIVATE ${TIFF_INCLUDE_DIRS})
 
 if(VOX2TET_USE_OPENMP)

@@ -69,3 +69,4 @@ Testing/
 .cache/
 
 tests/data/*/vox2tet_out/
+tests/data/*/vox2tet_out_new/

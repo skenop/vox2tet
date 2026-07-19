@@ -5,9 +5,10 @@
 // flipHalfEdge, smoothSurfacesTangential and remesh.
 //
 // Limitations vs the reference implementation:
-//   * `collapse_edges` is stubbed for now (it relies on the non-manifold
-//     boundary-link table from `create_boundary_hedges_links`, which is a
-//     follow-up).
+//   * `collapse_edges` implements the interior path (do_not_boundary=true),
+//     which is the one the remesh driver uses. The boundary-only and mixed
+//     paths still need the non-manifold boundary-link table from
+//     `create_boundary_hedges_links` and are no-ops for now.
 //   * `flipHalfEdge` uses the manifold half-edge structure as built by
 //     `triangles_to_hedges` — sufficient for the interior; boundary flips
 //     are skipped.
@@ -62,8 +63,11 @@ void flip_half_edge(const Settings& s,
                     bool do_not_boundary = false,
                     bool do_only_boundary = false);
 
-// Stub for now — full collapse requires the non-manifold blink table.
-// Returns the state unchanged. Documented as a TODO in PROGRESS.md.
+// Edge collapse. The interior path (do_not_boundary=true) is fully
+// implemented: collapses not-fixed interior half-edges shorter than
+// 4/5 × min(sizing) with fold and dihedral guards, then compacts the
+// mesh. The boundary-only and mixed paths still require the
+// non-manifold boundary-link table and return the state unchanged.
 void collapse_edges(const Settings& s, RemeshState& st,
                     bool do_not_boundary, bool do_only_boundary);
 

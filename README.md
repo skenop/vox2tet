@@ -8,7 +8,8 @@ materials, fibre-reinforced composites, or any other multi-material
 The pipeline runs as a single binary, `run_vox2tet`:
 
 ```
-voxel TIFF ─► marching cubes ─► smoothing ─► remeshing ─► TetGen ─► .inp
+voxel TIFF ─► marching cubes ─► smoothing ─► remeshing ─► tet meshing ─► .inp
+                                            (TetGen or built-in CDT+MMG)
 ```
 
 Based on the method from
@@ -18,7 +19,9 @@ Python implementation is also available at
 
 > **Full documentation:** [`doc/DOCUMENTATION.md`](doc/DOCUMENTATION.md)
 > covers every JSON parameter, intermediate file, key algorithm, and
-> mesh-quality guarantee.
+> mesh-quality guarantee. Measured comparisons (feature-chain
+> reseeding on/off, TetGen vs the built-in CDT+MMG backend):
+> [`doc/COMPARISON.md`](doc/COMPARISON.md).
 
 ## Quick start
 
@@ -41,7 +44,8 @@ With no arguments, `run_vox2tet` prints usage.
 | Eigen3           | FetchContent (automatic)                        |
 | nlohmann/json    | FetchContent (automatic)                        |
 | libtiff          | `apt install libtiff-dev` / `brew install libtiff` |
-| TetGen (runtime) | `apt install tetgen` / `brew install tetgen` — must be on `$PATH` |
+| TetGen (runtime) | vendored in `third-party/TetGen` (build it and put the binary on `$PATH`), or `apt install tetgen` — only for `tet_mesher: "tetgen"`; AGPL-3.0, invoked as a separate executable, never linked |
+| CDT + MMG3D      | vendored in `third-party/`, built automatically — used by `tet_mesher: "cdt"` (no external binary) |
 | OpenMP           | optional; comes with gcc/clang/MSVC             |
 
 C++17 compiler + CMake ≥ 3.20.
@@ -98,7 +102,7 @@ distinct id (typically 0).
 2. **Marching cubes** — Wu–Sullivan multi-material LUTs build a watertight non-manifold surface.
 3. **Pre-remesh smoothing** — Laplacian + tangential smoothing with dihedral & corner-angle reverts.
 4. **Remeshing** — `n_remesh_itr` iterations of split → collapse → flip → smooth, then active dihedral-repair and sliver-repair passes.
-5. **TetGen** — shells out to `tetgen -pYA -q2/15 -o/150 -nn -V` to build the volume mesh.
+5. **Tet meshing** — `tet_mesher: "cdt"` (default) runs the built-in in-process pipeline (Steiner CDT for exact surface recovery + MMG3D interior quality optimization — no external binary); `tet_mesher: "tetgen"` shells out to `tetgen -pYA -q2/15 -o/150 -nn -V`.
 6. **Abaqus export** — whole-volume and per-grain `.inp` files.
 
 ## Main outputs
@@ -139,7 +143,8 @@ The most useful fields:
 | `min_dangle_boundary`       | 20.0    | Min dihedral (°) on bounding-box edges. |
 | `min_corner_angle_internal` | 30.0    | Min triangle corner angle (°). |
 | `min_corner_angle_boundary` | 20.0    | Same, for bbox-only triangles. |
-| `do_tetgen_meshing`         | true    | Run TetGen (else stop at the surface). |
+| `do_tetgen_meshing`         | true    | Run volume meshing (else stop at the surface). |
+| `tet_mesher`                | "cdt"   | Volume-mesh backend: `"cdt"` (built-in CDT+MMG, default) or `"tetgen"` (external binary). |
 | `do_save_remesh_grains_stl` | true    | Per-grain coloured STLs. |
 
 Full list with descriptions: [`doc/DOCUMENTATION.md` §5][doc-cfg].
@@ -203,3 +208,17 @@ CLI is just 15 lines of glue — see `src/app/run_vox2tet.cpp`.
   (2022). <https://doi.org/10.1016/j.compstruct.2022.116003>
 
 [doc-cfg]: doc/DOCUMENTATION.md#5-json-configuration-parameters
+
+## License
+
+vox2tet is distributed under the **GNU Lesser General Public License,
+version 3 or later** — see [LICENSE](LICENSE) (LGPL-3.0) and
+[LICENSE.GPL](LICENSE.GPL) (the GPL-3.0 text it incorporates).
+
+Vendored third-party components keep their own licenses:
+[CDT](third-party/CDT) (built in its LGPL configuration by default;
+the `VOX2TET_CDT_MAROT=ON` build option enables its GPL-only face
+recovery and makes the combined binary GPL),
+[mmg](third-party/mmg) (LGPL-3.0), and
+[TetGen](third-party/TetGen) (AGPL-3.0 — built as a *separate
+executable* invoked at runtime, not linked into vox2tet).

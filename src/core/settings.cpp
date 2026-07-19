@@ -56,11 +56,23 @@ namespace {
     X(do_save_smooth_grains_inp)                                \
     X(brep_smoothness)                                          \
     X(brep_degree)                                              \
+    X(do_reseed_bedges)                                         \
+    X(do_reseed_triple_lines)                                   \
+    X(do_reseed_graded_sizing)                                  \
+    X(do_collapse_near_bedges)                                  \
+    X(do_reseed_lfs)                                            \
+    X(reseed_eps)                                               \
+    X(reseed_target_len)                                        \
+    X(reseed_grading)                                           \
+    X(reseed_beta)                                              \
     X(n_remesh_itr)                                             \
     X(Lmax)                                                     \
     X(do_save_remesh_interfaces)                                \
     X(do_save_remesh_grains_stl)                                \
-    X(do_save_remesh_grains_inp)
+    X(do_save_remesh_grains_inp)                                \
+    X(tet_mesher)                                               \
+    X(do_mmg_optim)                                             \
+    X(mmg_verbose)
 
 std::string now_string() {
     using namespace std::chrono;

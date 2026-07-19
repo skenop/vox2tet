@@ -10,6 +10,7 @@
 #include <unordered_map>
 #include <cstdint>
 #include <limits>
+#include <queue>
 #include <stdexcept>
 #include <vector>
 
@@ -457,6 +458,58 @@ Eigen::VectorXd calc_sizing_field(const mesh::HalfEdges& he,
     }
     VOX2TET_PRINT("End sizing field calculation!");
     return L;
+}
+
+// ---------------------------------------------------------------------------
+std::size_t limit_sizing_gradient(const mesh::HalfEdges& he,
+                                  const Coords& xyz,
+                                  Eigen::VectorXd& L,
+                                  double grading,
+                                  double tol) {
+    if (grading <= 1.0 || L.size() == 0) return 0;
+    const double slope = grading - 1.0;
+
+    // Undirected edge graph from the half-edges: for hedge k the edge is
+    // (prev.target, target). Every mesh edge appears once per incident
+    // triangle; the relaxation is idempotent so duplicates are harmless.
+    const auto n_he = he.rows();
+    std::vector<std::vector<std::pair<std::uint32_t, double>>> adj(
+        static_cast<std::size_t>(L.size()));
+    for (Eigen::Index k = 0; k < n_he; ++k) {
+        const std::uint32_t a = he(he(k, 2), 0);
+        const std::uint32_t b = he(k, 0);
+        const double w = (xyz.row(a) - xyz.row(b)).norm();
+        adj[a].emplace_back(b, w);
+        adj[b].emplace_back(a, w);
+    }
+
+    // Multi-source Dijkstra with lazy deletion: every vertex is a source
+    // at its own initial value; popping in ascending order guarantees
+    // each vertex is finalised at the min over all paths of
+    // L0[u] + slope * pathlen(u..v).
+    const Eigen::VectorXd L0 = L;
+    using QE = std::pair<double, std::uint32_t>;  // (value, vertex)
+    std::priority_queue<QE, std::vector<QE>, std::greater<QE>> pq;
+    for (Eigen::Index v = 0; v < L.size(); ++v)
+        pq.emplace(L[v], static_cast<std::uint32_t>(v));
+
+    while (!pq.empty()) {
+        const auto [lu, u] = pq.top();
+        pq.pop();
+        if (lu > L[u]) continue;  // stale entry
+        for (const auto& [v, w] : adj[u]) {
+            const double cand = lu + slope * w;
+            if (cand < L[v]) {
+                L[v] = cand;
+                pq.emplace(cand, v);
+            }
+        }
+    }
+
+    std::size_t lowered = 0;
+    for (Eigen::Index v = 0; v < L.size(); ++v)
+        if (L0[v] - L[v] > tol) ++lowered;
+    return lowered;
 }
 
 // ---------------------------------------------------------------------------

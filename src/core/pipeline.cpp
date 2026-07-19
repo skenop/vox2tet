@@ -11,8 +11,10 @@
 #include "vox2tet/marching_cubes/contouring.hpp"
 #include "vox2tet/mesh/half_edge.hpp"
 #include "vox2tet/remesh/remesh.hpp"
+#include "vox2tet/remesh/reseed.hpp"
 #include "vox2tet/remesh/smooth.hpp"
 #include "vox2tet/tetgen/tetgen_runner.hpp"
+#include "vox2tet/tetmesh/cdt_mmg_runner.hpp"
 
 #include <cmath>
 #include <iostream>
@@ -125,6 +127,36 @@ void generate(const Settings& s) {
                                                   masks.not_fixed_h, initial.xyz,
                                                   masks.not_fixed_v,
                                                   s.out_path_base);
+            // Boundary-edge reseeding (Stage A: bbox frame; Stage A2:
+            // traces and triple lines when do_reseed_triple_lines).
+            // Coarsens the feature chains by guarded edge collapse and
+            // compacts the mesh arrays in place; every piece of derived
+            // state (half-edges, masks, brep sizing) is then recomputed
+            // from the reseeded mesh. With do_reseed_bedges=false this
+            // block is skipped and the pipeline behaves exactly as
+            // before (frozen chains).
+            if (s.do_reseed_bedges) {
+                const auto rs = remesh::reseed_feature_chains(
+                    s, initial.tri, initial.xyz, node_type_mask, interfaces);
+                if (rs.verts_removed > 0) {
+                    he    = mesh::triangles_to_hedges(initial.tri, &interfaces);
+                    masks = mesh::get_not_fixed(he, initial.xyz, node_type_mask);
+                    std::vector<std::uint8_t> is_brep(
+                        static_cast<std::size_t>(initial.xyz.rows()), 0);
+                    for (Eigen::Index v = 0; v < initial.xyz.rows(); ++v)
+                        is_brep[static_cast<std::size_t>(v)] =
+                            !node_type_mask.masks[0][v];
+                    brep_sz = remesh::calc_brep_sizing(initial.xyz, is_brep);
+                    // Debug dump of the reseeded chains (_RS_E.ply).
+                    auto bedges2 = brep::get_boundary_edges(initial.tri,
+                                                            node_type_mask);
+                    auto brep2 = brep::order_bedges(bedges2, node_type_mask);
+                    brep::save_brep_ply(brep2, initial.xyz,
+                                        s.out_path_base + "_RS",
+                                        {255, 128, 0});
+                }
+            }
+
             auto normals = remesh::calc_initial_vertex_normal(
                 initial.xyz, initial.tri, node_type_mask.masks[0]);
             // Full per-vertex sizing field for the remesh phase.
@@ -137,6 +169,18 @@ void generate(const Settings& s) {
                                                     node_type_mask.masks[0],
                                                     interfaces,
                                                     Lmin, s.Lmax);
+            // Stage C (experimental, default off): grade the field so
+            // size transitions are bounded. Gated on do_reseed_bedges
+            // so that flag alone still restores the legacy pipeline
+            // exactly. See doc/RESEEDING.md for why this is off by
+            // default (measured: no quality benefit on JMA fixtures).
+            if (s.do_reseed_bedges && s.do_reseed_graded_sizing) {
+                const auto lowered = remesh::limit_sizing_gradient(
+                    he, initial.xyz, sizing, s.reseed_grading);
+                VOX2TET_LOG() << "limit_sizing_gradient: g="
+                              << s.reseed_grading << ", lowered " << lowered
+                              << " of " << sizing.size() << " vertices";
+            }
 
             // Persist _xyz_s.npy / _norm.npy / _sz_fld.npy as float64 —
             // matches the reference `np.save(... , xyz)` where xyz has been
@@ -197,11 +241,16 @@ void generate(const Settings& s) {
     if (s.do_tetgen_meshing) {
         log_phase("TET MESH STEP");
         if (initial.tri.rows() == 0) {
-            VOX2TET_PRINT("tetgen: skipped — no surface mesh");
+            VOX2TET_PRINT("tet meshing: skipped — no surface mesh");
         } else {
             const std::string base = s.out_path_base + "_RE";
-            tetgen::mesh_volume(base, initial.xyz, initial.tri, interfaces,
-                                s.do_abaqus_verification);
+            if (s.tet_mesher == "cdt") {
+                tetmesh::mesh_volume(s, base, initial.xyz, initial.tri,
+                                     interfaces);
+            } else {
+                tetgen::mesh_volume(base, initial.xyz, initial.tri,
+                                    interfaces, s.do_abaqus_verification);
+            }
         }
     }
 
