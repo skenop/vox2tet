@@ -3,7 +3,10 @@
 #include "vox2tet/core/log.hpp"
 #include "vox2tet/marching_cubes/contouring.hpp"
 #include "vox2tet/mesh/mathx.hpp"
+#include "vox2tet/remesh/reseed.hpp"
 #include "vox2tet/remesh/smooth.hpp"
+
+#include "isect_guard.hpp"
 
 #include <Eigen/Geometry>
 #include <algorithm>
@@ -13,6 +16,7 @@
 #include <cstring>
 #include <limits>
 #include <map>
+#include <optional>
 #include <set>
 #include <stdexcept>
 #include <unordered_map>
@@ -392,6 +396,13 @@ void flip_half_edge(const Settings& s,
     }
 
     std::size_t n_flipped = 0;
+    // Self-intersection guard (src/remesh/isect_guard.hpp), active with
+    // the near-chain collapse path: a flip must not fold one of its two
+    // new triangles through distant geometry.
+    std::size_t n_skip_isect = 0;
+    std::optional<detail::IsectGuard> guard;
+    if (s.do_reseed_bedges && s.do_collapse_near_bedges) guard.emplace(he, xyz);
+
     for (u32 h : candidates) {
         // Re-check (could have been modified by an earlier flip).
         if (!not_fixed_h[h]) continue;
@@ -563,6 +574,14 @@ void flip_half_edge(const Settings& s,
             }
         }
 
+        // Intersection guard on the two new triangles (the flip is
+        // already applied to `he`, so revert() undoes it).
+        if (guard && (guard->crosses(vi2, vi3, vi0) || guard->crosses(vi2, vi1, vi3))) {
+            revert();
+            ++n_skip_isect;
+            continue;
+        }
+
         // Accept flip.
         adj[vi0].erase(vi1);
         adj[vi1].erase(vi0);
@@ -570,10 +589,21 @@ void flip_half_edge(const Settings& s,
         adj[vi3][vi2] = 1;
         edge_mult.erase(edge_key(vi0, vi1));
         edge_mult[edge_key(vi2, vi3)] = 2;
+        if (guard) {
+            // The flip moved rows between the two triangles: e0, e2, e4
+            // now form one triangle and e1, e3, e5 the other.
+            const int tA = guard->tri_of(e0), tB = guard->tri_of(e3);
+            guard->reassign(tA, e0);
+            guard->reassign(tB, e1);
+        }
         ++n_flipped;
     }
 
-    if (n_flipped > 0) VOX2TET_LOG() << "flip_half_edge: flipped " << n_flipped;
+    if (guard && (n_flipped > 0 || n_skip_isect > 0))
+        VOX2TET_LOG() << "flip_half_edge: flipped " << n_flipped
+                      << " (skip_isect=" << n_skip_isect << ")";
+    else if (n_flipped > 0)
+        VOX2TET_LOG() << "flip_half_edge: flipped " << n_flipped;
 }
 
 // ---------------------------------------------------------------------------
@@ -661,7 +691,18 @@ void collapse_edges(const Settings& s, RemeshState& st,
     const double c45 = 4.0 / 5.0;
     std::size_t n_collapsed = 0;
     std::size_t n_cand = 0, n_skip_len = 0, n_skip_ring = 0, n_skip_dup = 0,
-                n_skip_dih = 0, n_skip_orient = 0, n_skip_qual = 0;
+                n_skip_dih = 0, n_skip_orient = 0, n_skip_qual = 0,
+                n_skip_isect = 0;
+
+    // Self-intersection guard (src/remesh/isect_guard.hpp), active with
+    // the near-chain collapse path. A collapse moves no vertex: vi0's fan
+    // is retargeted to vi1, and each retargeted triangle (vi1, va, vb)
+    // must not cross distant geometry. Applied to every collapse, not only
+    // the relaxed ones — the tighter mesh next to chains lets ordinary
+    // collapses fold a sheet too.
+    const bool use_isect_guard = s.do_reseed_bedges && s.do_collapse_near_bedges;
+    std::optional<detail::IsectGuard> guard;
+    if (use_isect_guard) guard.emplace(he, xyz, &h_collapsed);
 
     // Iterate half-edges in stable order — newest-added ones may sit at
     // the end; that's fine.
@@ -870,6 +911,16 @@ void collapse_edges(const Settings& s, RemeshState& st,
             if (!qual_ok) { ++n_skip_qual; continue; }
         }
 
+        // Intersection guard: no retargeted fan triangle may cross
+        // distant geometry. Each c_h entry is the outer edge of one fan
+        // triangle around vi0, which becomes (vi1, src, tgt) of that edge.
+        if (guard) {
+            bool hit = false;
+            for (std::size_t k = 0; k < c_h.size() && !hit; ++k)
+                hit = guard->crosses(vi1, he(he(c_h[k], 2), 0), he(c_h[k], 0), vi0);
+            if (hit) { ++n_skip_isect; continue; }
+        }
+
         // ---- Apply collapse -------------------------------------------
         // 1. All half-edges hitting vi0 now hit vi1. the reference does
         //      hedges[hedges[c_h, 1], 0] = vi1
@@ -877,6 +928,10 @@ void collapse_edges(const Settings& s, RemeshState& st,
         //    .next once more to land on the hedge that closes the
         //    triangle back to vi0, and retarget that hedge to vi1.
         for (auto h : c_h) he(he(h, 1), 0) = vi1;
+        // Keep the guard's boxes conservative: the retargeted fan
+        // triangles now span vi1.
+        if (guard)
+            for (auto h : c_h) guard->refresh(guard->tri_of(h));
 
         // 2. Re-link opposite pointers of the four edges that used to be
         //    incident to the two collapsed triangles.
@@ -902,6 +957,8 @@ void collapse_edges(const Settings& s, RemeshState& st,
                   << " skip_dih=" << n_skip_dih
                   << " skip_orient=" << n_skip_orient
                   << " skip_qual=" << n_skip_qual
+                  << (guard ? " skip_isect=" + std::to_string(n_skip_isect)
+                            : std::string())
                   << " collapsed=" << n_collapsed;
     if (n_collapsed == 0) return;
 

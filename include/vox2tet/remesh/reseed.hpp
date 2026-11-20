@@ -147,6 +147,30 @@ struct AabbTree {
         }
     }
 
+    // Invoke f(item) for every item whose leaf box overlaps the box
+    // [lo, hi] (inclusive, small tolerance). Exact intersection is the
+    // caller's job.
+    template <typename F>
+    void for_box(const Eigen::Vector3d& lo, const Eigen::Vector3d& hi,
+                 F&& f) const {
+        if (root < 0) return;
+        constexpr double kTol = 1e-9;
+        std::vector<int> stack{root};
+        while (!stack.empty()) {
+            const int ni = stack.back();
+            stack.pop_back();
+            const Node& n = nodes[static_cast<std::size_t>(ni)];
+            if ((n.lo.array() > hi.array() + kTol).any() ||
+                (n.hi.array() < lo.array() - kTol).any()) continue;
+            if (n.left < 0) {
+                for (int it : n.items) f(it);
+            } else {
+                stack.push_back(n.left);
+                stack.push_back(n.right);
+            }
+        }
+    }
+
     static bool segment_touches_box(const Eigen::Vector3d& a,
                                     const Eigen::Vector3d& b,
                                     const Eigen::Vector3d& lo,

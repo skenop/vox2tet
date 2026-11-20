@@ -36,10 +36,13 @@
 #include "vox2tet/mesh/mathx.hpp"
 #include "vox2tet/remesh/smooth.hpp"
 
+#include "isect_guard.hpp"
+
 #include <Eigen/Geometry>
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <optional>
 #include <vector>
 
 namespace vox2tet::remesh {
@@ -150,7 +153,7 @@ std::vector<std::vector<u32>> build_v2he(const mesh::HalfEdges& he) {
 }  // namespace
 
 // ---------------------------------------------------------------------------
-DangleRepairStats dangle_repair(const Settings& /*s*/,
+DangleRepairStats dangle_repair(const Settings& s,
                                 const mesh::HalfEdges& he,
                                 Coords& xyz,
                                 const Coords& xyz_init,
@@ -222,6 +225,20 @@ DangleRepairStats dangle_repair(const Settings& /*s*/,
     // the edge length so we stay inside max_D2self with comfortable
     // margin and don't overshoot past 90°.
     const double step_frac = 0.05;
+
+    // Self-intersection guard (src/remesh/isect_guard.hpp), active with
+    // the near-chain collapse path: an apex lift must not push any of
+    // the apex's triangles through distant geometry.
+    std::optional<detail::IsectGuard> guard;
+    if (s.do_reseed_bedges && s.do_collapse_near_bedges) guard.emplace(he, xyz);
+    auto apex_tris_cross = [&](u32 apex) {
+        for (u32 h_adj : v2h[apex]) {
+            u32 v[3];
+            guard->verts_of(h_adj, v);
+            if (guard->crosses(v[0], v[1], v[2])) return true;
+        }
+        return false;
+    };
 
     auto cycle_mates = cycle_mates0;
     for (int pass = 0; pass < max_passes; ++pass) {
@@ -311,7 +328,11 @@ DangleRepairStats dangle_repair(const Settings& /*s*/,
                     }
                 }
 
+                if (accept && guard && apex_tris_cross(apex)) accept = false;
+
                 if (accept) {
+                    if (guard)
+                        for (u32 h_adj : v2h[apex]) guard->refresh(guard->tri_of(h_adj));
                     ++R.accepted_moves;
                     ++accepted_this_pass;
                     break;  // move was accepted; don't try the other side
