@@ -198,9 +198,9 @@ All `Settings` fields, grouped logically:
 | Field                       | Default | Purpose |
 |-----------------------------|---------|---------|
 | `max_remove_size`           | 64      | Remove connected components smaller than this voxel count. |
-| `connectivity`              | 3       | Connectivity for component analysis (1/2/3 → 6/18/26-conn.). |
+| `connectivity`              | 1       | Connectivity for component analysis (1/2/3 → 6/18/26-conn.). With 1, pieces joined to their label only by an edge or corner are treated as separate components, so small ones are removed (this also removes 1-voxel-thick diagonal structures). |
 | `do_remove_small`           | true    | Enable the small-component filter. |
-| `do_diagonal_connectivity`  | true    | Use diagonal-aware MC lookup for ambiguous 2×2 patterns. |
+| `do_diagonal_connectivity`  | false   | Before marching cubes, recolour voxels where a label touches itself only at an edge or a corner (critical connectivity fix). Modifies the input image; one pass, so a few cases may remain. Useful only for very noisy segmentations, or when each label must be a single body touching itself nowhere by a point or an edge. |
 | `do_2x2patterns`            | true    | Resolve 2×2 face ambiguities via extra disambiguation table. |
 | `do_show_hist`              | false   | Print MC histogram of cube cases. |
 | `do_save_init_interfaces`   | false   | Save one STL per interface pair (debug). |

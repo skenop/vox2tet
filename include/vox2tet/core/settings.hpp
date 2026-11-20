@@ -18,7 +18,12 @@ struct Settings {
 
     // --- general workflow flags ---------------------------------------
     bool do_remove_small         = true;
-    bool do_diagonal_connectivity= true;
+    // Critical-connectivity fix (recolours voxels where one label touches
+    // itself only at an edge or a corner). Off by default: with
+    // connectivity = 1 the small-region removal already cleans noise, and
+    // the remaining same-label contacts match the line/point junctions
+    // between different grains that the mesh contains anyway.
+    bool do_diagonal_connectivity= false;
     bool do_initial_surface      = true;
     bool do_preremesh_steps      = true;
     bool do_remeshing            = true;
@@ -33,7 +38,10 @@ struct Settings {
 
     // --- initial surface ----------------------------------------------
     int  max_remove_size           = 64;
-    int  connectivity              = 3;
+    // 1 = 6-connectivity (face). Pieces attached to their label only by an
+    // edge or a corner count as separate components, so small ones are
+    // removed together with truly isolated regions.
+    int  connectivity              = 1;
     bool do_show_hist              = false;
     bool do_2x2patterns            = true;
     bool do_save_init_interfaces   = false;
